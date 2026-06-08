@@ -225,18 +225,57 @@ runs:
           exit 0
         fi
 
-        status="success"
-        if [ "${SECURITY_CLI_EXIT_CODE:-1}" != "0" ]; then
-          status="failure"
-        fi
+        if ! node <<'NODE'
+        const baseUrl = (process.env.SE_ACTIONS_BASE_URL || 'https://actions.euno.work').replace(/\/+$/, '');
+        const exitCode = process.env.SECURITY_CLI_EXIT_CODE || '1';
+        const durationSeconds = Number.parseInt(process.env.SECURITY_CLI_DURATION_SECONDS || '0', 10);
+        const ref = process.env.GITHUB_REF || '';
 
-        duration="${SECURITY_CLI_DURATION_SECONDS:-0}"
-        if ! [[ "${duration}" =~ ^[0-9]+$ ]]; then
-          duration="0"
-        fi
+        let prNumber = null;
+        const prMatch = ref.match(/^refs\/pull\/(\d+)\/merge$/);
+        if (prMatch) {
+          prNumber = Number.parseInt(prMatch[1], 10);
+        }
 
-        if ! curl -fsSL "${SE_ACTIONS_BASE_URL}/api/scripts/track-usage.sh" | \
-          bash -s -- "${SE_ACTIONS_ACTION_SLUG}" "${status}" "${duration}" "${SE_ACTIONS_BASE_URL}"; then
+        const payload = {
+          actionSlug: process.env.SE_ACTIONS_ACTION_SLUG || 'security-cli-action',
+          repository: process.env.GITHUB_REPOSITORY || '',
+          workflow: process.env.GITHUB_WORKFLOW || '',
+          runId: process.env.GITHUB_RUN_ID || '',
+          actor: process.env.GITHUB_ACTOR || '',
+          status: exitCode === '0' ? 'success' : 'failure',
+          duration: Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds * 1000 : 0,
+          eventName: process.env.GITHUB_EVENT_NAME || '',
+          ref,
+          sha: process.env.GITHUB_SHA || '',
+          baseRef: process.env.GITHUB_BASE_REF || '',
+          headRef: process.env.GITHUB_HEAD_REF || '',
+          prNumber,
+          runnerOS: process.env.RUNNER_OS || '',
+          runnerArch: process.env.RUNNER_ARCH || '',
+          runnerVersion: process.env.ImageVersion || '',
+          actionVersion: process.env.GITHUB_ACTION_REF || '',
+          jobName: process.env.GITHUB_JOB || '',
+          stepName: process.env.GITHUB_ACTION || '',
+        };
+
+        const response = await fetch(`${baseUrl}/api/analytics/track`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.SE_ACTIONS_API_KEY,
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const body = await response.text();
+          throw new Error(`usage tracking failed: HTTP ${response.status} ${body.slice(0, 200)}`);
+        }
+
+        console.log(`Usage tracked for action: ${payload.actionSlug}`);
+        NODE
+        then
           echo "Warning: failed to track SE Actions usage (non-critical)."
         fi
 
