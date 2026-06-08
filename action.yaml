@@ -126,6 +126,11 @@ runs:
         set -euo pipefail
         security-cli tools update-db
 
+    - name: Set up annotation runtime
+      uses: actions/setup-node@v4
+      with:
+        node-version: "24"
+
     - name: Run security-cli
       id: scan
       shell: bash
