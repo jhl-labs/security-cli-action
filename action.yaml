@@ -1,0 +1,291 @@
+name: Security CLI Action
+description: Install security-cli from jhl-labs/dist and publish scan findings as GitHub Actions annotations.
+
+inputs:
+  token:
+    description: GitHub token used by checkout and security-cli tool installation.
+    required: false
+    default: ${{ github.token }}
+  checkout:
+    description: Whether this action should checkout the repository before scanning.
+    required: false
+    default: "true"
+  repository:
+    description: Repository to checkout.
+    required: false
+    default: ${{ github.repository }}
+  ref:
+    description: Git ref to checkout.
+    required: false
+    default: ${{ github.ref }}
+  fetch-depth:
+    description: Checkout fetch depth. Use 0 when secret scanning needs Git history.
+    required: false
+    default: "0"
+  version:
+    description: security-cli version to install, such as v0.1.8. Use latest for the newest public release.
+    required: false
+    default: latest
+  target:
+    description: Path or artifact target passed to security-cli.
+    required: false
+    default: .
+  command:
+    description: security-cli command to run.
+    required: false
+    default: diagnose
+  profile:
+    description: security-cli profile.
+    required: false
+    default: ci
+  output-dir:
+    description: Directory where security-cli writes reports.
+    required: false
+    default: reports/security
+  formats:
+    description: Comma-separated security-cli output formats.
+    required: false
+    default: stdout,json,sarif
+  install-tools:
+    description: Install the default scanner toolchain before scanning.
+    required: false
+    default: "true"
+  update-db:
+    description: Update scanner vulnerability databases before scanning.
+    required: false
+    default: "false"
+  annotation-limit:
+    description: Maximum number of GitHub Actions annotations to emit.
+    required: false
+    default: "200"
+  fail-on-findings:
+    description: Return the security-cli exit code after annotations are emitted.
+    required: false
+    default: "true"
+  extra-args:
+    description: Extra arguments appended to the security-cli command.
+    required: false
+    default: ""
+
+outputs:
+  exit-code:
+    description: security-cli exit code.
+    value: ${{ steps.scan.outputs.exit-code }}
+  report-dir:
+    description: Directory containing security-cli reports.
+    value: ${{ inputs.output-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout repository
+      if: ${{ inputs.checkout == 'true' }}
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.ref }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+        token: ${{ inputs.token }}
+
+    - name: Install security-cli
+      shell: bash
+      env:
+        SECURITY_CLI_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        install_dir="${RUNNER_TEMP}/security-cli/bin"
+        mkdir -p "${install_dir}"
+
+        if [ "${SECURITY_CLI_VERSION}" = "latest" ] || [ -z "${SECURITY_CLI_VERSION}" ]; then
+          curl -fsSL https://jhl-labs.github.io/security-cli/install.sh | INSTALL_DIR="${install_dir}" bash
+        else
+          curl -fsSL https://jhl-labs.github.io/security-cli/install.sh | INSTALL_DIR="${install_dir}" VERSION="${SECURITY_CLI_VERSION}" bash
+        fi
+
+        echo "${install_dir}" >> "${GITHUB_PATH}"
+        "${install_dir}/security-cli" --version
+
+    - name: Install scanner tools
+      if: ${{ inputs.install-tools == 'true' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        security-cli tools install
+
+    - name: Update scanner databases
+      if: ${{ inputs.update-db == 'true' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        security-cli tools update-db
+
+    - name: Run security-cli
+      id: scan
+      shell: bash
+      env:
+        SECURITY_CLI_COMMAND: ${{ inputs.command }}
+        SECURITY_CLI_TARGET: ${{ inputs.target }}
+        SECURITY_CLI_PROFILE: ${{ inputs.profile }}
+        SECURITY_CLI_OUTPUT_DIR: ${{ inputs.output-dir }}
+        SECURITY_CLI_FORMATS: ${{ inputs.formats }}
+        SECURITY_CLI_EXTRA_ARGS: ${{ inputs.extra-args }}
+      run: |
+        set +e
+
+        mkdir -p "${SECURITY_CLI_OUTPUT_DIR}"
+
+        format_args=()
+        IFS=',' read -ra requested_formats <<< "${SECURITY_CLI_FORMATS}"
+        for format in "${requested_formats[@]}"; do
+          trimmed="$(echo "${format}" | xargs)"
+          if [ -n "${trimmed}" ]; then
+            format_args+=(--format "${trimmed}")
+          fi
+        done
+
+        extra_args=()
+        if [ -n "${SECURITY_CLI_EXTRA_ARGS}" ]; then
+          read -r -a extra_args <<< "${SECURITY_CLI_EXTRA_ARGS}"
+        fi
+
+        security-cli "${SECURITY_CLI_COMMAND}" "${SECURITY_CLI_TARGET}" \
+          --profile "${SECURITY_CLI_PROFILE}" \
+          --output-dir "${SECURITY_CLI_OUTPUT_DIR}" \
+          "${format_args[@]}" \
+          "${extra_args[@]}"
+        exit_code=$?
+
+        echo "exit-code=${exit_code}" >> "${GITHUB_OUTPUT}"
+        exit 0
+
+    - name: Publish GitHub annotations
+      shell: bash
+      env:
+        SECURITY_CLI_OUTPUT_DIR: ${{ inputs.output-dir }}
+        ANNOTATION_LIMIT: ${{ inputs.annotation-limit }}
+      run: |
+        set -euo pipefail
+
+        node <<'NODE'
+        const fs = require('fs');
+        const path = require('path');
+
+        const reportDir = process.env.SECURITY_CLI_OUTPUT_DIR || 'reports/security';
+        const limit = Number.parseInt(process.env.ANNOTATION_LIMIT || '200', 10);
+
+        function walk(dir) {
+          if (!fs.existsSync(dir)) {
+            return [];
+          }
+          return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+            const fullPath = path.join(dir, entry.name);
+            return entry.isDirectory() ? walk(fullPath) : [fullPath];
+          });
+        }
+
+        function escapeCommand(value) {
+          return String(value ?? '')
+            .replace(/%/g, '%25')
+            .replace(/\r/g, '%0D')
+            .replace(/\n/g, '%0A');
+        }
+
+        function severityFromResult(result) {
+          const properties = result.properties || {};
+          const rawSeverity = [
+            properties.severity,
+            properties['security-severity'],
+            properties.problem?.severity,
+            ...(Array.isArray(properties.tags) ? properties.tags : []),
+            result.ruleId,
+            result.message?.text,
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+
+          if (/\bcritical\b|\bcrit\b/.test(rawSeverity)) return 'critical';
+          if (/\bhigh\b/.test(rawSeverity)) return 'high';
+          if (/\bmedium\b|\bmoderate\b/.test(rawSeverity)) return 'medium';
+          if (/\blow\b/.test(rawSeverity)) return 'low';
+          if (result.level === 'error') return 'high';
+          if (result.level === 'warning') return 'medium';
+          return 'low';
+        }
+
+        function commandLevel(severity) {
+          if (severity === 'critical' || severity === 'high') return 'error';
+          if (severity === 'medium') return 'warning';
+          return 'notice';
+        }
+
+        function firstLocation(result) {
+          const location = result.locations?.[0]?.physicalLocation || {};
+          const region = location.region || {};
+          return {
+            file: location.artifactLocation?.uri || 'security-cli',
+            line: region.startLine || 1,
+            endLine: region.endLine || region.startLine || 1,
+            col: region.startColumn,
+            endColumn: region.endColumn,
+          };
+        }
+
+        const sarifFiles = walk(reportDir).filter((file) => file.endsWith('.sarif'));
+        let emitted = 0;
+
+        for (const file of sarifFiles) {
+          const sarif = JSON.parse(fs.readFileSync(file, 'utf8'));
+          for (const run of sarif.runs || []) {
+            const rules = new Map(
+              (run.tool?.driver?.rules || []).map((rule) => [rule.id, rule])
+            );
+
+            for (const result of run.results || []) {
+              if (emitted >= limit) break;
+
+              const severity = severityFromResult(result);
+              const level = commandLevel(severity);
+              const location = firstLocation(result);
+              const rule = rules.get(result.ruleId) || {};
+              const title = `${severity.toUpperCase()}: ${
+                rule.name || rule.shortDescription?.text || result.ruleId || 'security finding'
+              }`;
+              const message = result.message?.text || rule.fullDescription?.text || title;
+
+              const props = [
+                `file=${escapeCommand(location.file)}`,
+                `line=${location.line}`,
+                `endLine=${location.endLine}`,
+                `title=${escapeCommand(title)}`,
+              ];
+
+              if (location.col) props.push(`col=${location.col}`);
+              if (location.endColumn) props.push(`endColumn=${location.endColumn}`);
+
+              console.log(`::${level} ${props.join(',')}::${escapeCommand(message)}`);
+              emitted += 1;
+            }
+          }
+        }
+
+        if (emitted === 0) {
+          console.log('No SARIF annotations emitted.');
+        } else {
+          console.log(`Emitted ${emitted} security annotations.`);
+        }
+        NODE
+
+    - name: Enforce security-cli result
+      if: ${{ inputs.fail-on-findings == 'true' && steps.scan.outputs.exit-code != '0' }}
+      shell: bash
+      run: |
+        echo "security-cli exited with code ${{ steps.scan.outputs.exit-code }}"
+        exit "${{ steps.scan.outputs.exit-code }}"
