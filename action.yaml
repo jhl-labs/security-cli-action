@@ -235,8 +235,12 @@ runs:
           duration="0"
         fi
 
-        curl -sSL "${SE_ACTIONS_BASE_URL}/scripts/track-usage.sh" | \
-          bash -s -- "${SE_ACTIONS_ACTION_SLUG}" "${status}" "${duration}" "${SE_ACTIONS_BASE_URL}"
+        if ! curl -fsSL "${SE_ACTIONS_BASE_URL}/api/scripts/track-usage.sh" | \
+          bash -s -- "${SE_ACTIONS_ACTION_SLUG}" "${status}" "${duration}" "${SE_ACTIONS_BASE_URL}"; then
+          echo "Warning: failed to track SE Actions usage (non-critical)."
+        fi
+
+        exit 0
 
     - name: Publish GitHub annotations
       shell: bash

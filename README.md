@@ -44,7 +44,7 @@ with:
 The metrics payload is sent through:
 
 ```bash
-https://actions.euno.work/scripts/track-usage.sh
+https://actions.euno.work/api/scripts/track-usage.sh
 ```
 
 `status` is derived from the `security-cli` exit code, and `duration` is measured around the
