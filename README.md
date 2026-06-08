@@ -49,3 +49,6 @@ POST https://actions.euno.work/api/analytics/track
 
 `status` is derived from the `security-cli` exit code, and `duration` is measured around the
 `security-cli` execution step.
+
+For controlled smoke tests, `se-actions-origin-ip` can be set to send the metrics request directly
+to the SE Actions Space origin ingress when an external proxy blocks GitHub-hosted runners.

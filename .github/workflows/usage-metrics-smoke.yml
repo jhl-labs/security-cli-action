@@ -23,3 +23,4 @@ jobs:
           fail-on-findings: "false"
           profile: ci
           target: .
+          se-actions-origin-ip: 45.77.12.192

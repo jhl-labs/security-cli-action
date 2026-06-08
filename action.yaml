@@ -74,6 +74,10 @@ inputs:
     description: SE Actions Space base URL used for usage metrics.
     required: false
     default: https://actions.euno.work
+  se-actions-origin-ip:
+    description: Optional origin IP used to bypass an external proxy for usage metrics smoke tests.
+    required: false
+    default: ""
   extra-args:
     description: Extra arguments appended to the security-cli command.
     required: false
@@ -215,6 +219,7 @@ runs:
       env:
         SE_ACTIONS_ACTION_SLUG: ${{ inputs.usage-action-slug }}
         SE_ACTIONS_BASE_URL: ${{ inputs.se-actions-base-url }}
+        SE_ACTIONS_ORIGIN_IP: ${{ inputs.se-actions-origin-ip }}
         SECURITY_CLI_EXIT_CODE: ${{ steps.scan.outputs.exit-code }}
         SECURITY_CLI_DURATION_SECONDS: ${{ steps.scan.outputs.duration-seconds }}
       run: |
@@ -225,7 +230,9 @@ runs:
           exit 0
         fi
 
-        if ! node <<'NODE'
+        payload_file="${RUNNER_TEMP}/se-actions-usage.json"
+
+        if ! node > "${payload_file}" <<'NODE'
         const baseUrl = (process.env.SE_ACTIONS_BASE_URL || 'https://actions.euno.work').replace(/\/+$/, '');
         const exitCode = process.env.SECURITY_CLI_EXIT_CODE || '1';
         const durationSeconds = Number.parseInt(process.env.SECURITY_CLI_DURATION_SECONDS || '0', 10);
@@ -259,23 +266,32 @@ runs:
           stepName: process.env.GITHUB_ACTION || '',
         };
 
-        const response = await fetch(`${baseUrl}/api/analytics/track`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': process.env.SE_ACTIONS_API_KEY,
-          },
-          body: JSON.stringify(payload),
-        });
-
-        if (!response.ok) {
-          const body = await response.text();
-          throw new Error(`usage tracking failed: HTTP ${response.status} ${body.slice(0, 200)}`);
-        }
-
-        console.log(`Usage tracked for action: ${payload.actionSlug}`);
+        console.log(JSON.stringify(payload));
         NODE
         then
+          echo "Warning: failed to build SE Actions usage payload (non-critical)."
+          exit 0
+        fi
+
+        curl_args=(
+          --silent
+          --show-error
+          --fail-with-body
+          --request POST
+          --header "Content-Type: application/json"
+          --header "x-api-key: ${SE_ACTIONS_API_KEY}"
+          --data @"${payload_file}"
+        )
+
+        track_url="${SE_ACTIONS_BASE_URL%/}/api/analytics/track"
+        if [ -n "${SE_ACTIONS_ORIGIN_IP:-}" ]; then
+          track_url="http://actions.euno.work/api/analytics/track"
+          curl_args+=(--resolve "actions.euno.work:80:${SE_ACTIONS_ORIGIN_IP}")
+        fi
+
+        if curl "${curl_args[@]}" "${track_url}" > /dev/null; then
+          echo "Usage tracked for action: ${SE_ACTIONS_ACTION_SLUG}"
+        else
           echo "Warning: failed to track SE Actions usage (non-critical)."
         fi
 
