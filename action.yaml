@@ -114,7 +114,17 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
       run: |
         set -euo pipefail
-        security-cli tools install
+        for attempt in 1 2 3; do
+          if security-cli tools install; then
+            exit 0
+          fi
+          if [ "${attempt}" = "3" ]; then
+            exit 1
+          fi
+          sleep_seconds=$((attempt * 10))
+          echo "security-cli tools install failed; retrying in ${sleep_seconds}s"
+          sleep "${sleep_seconds}"
+        done
 
     - name: Update scanner databases
       if: ${{ inputs.update-db == 'true' }}
@@ -124,7 +134,17 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
       run: |
         set -euo pipefail
-        security-cli tools update-db
+        for attempt in 1 2 3; do
+          if security-cli tools update-db; then
+            exit 0
+          fi
+          if [ "${attempt}" = "3" ]; then
+            exit 1
+          fi
+          sleep_seconds=$((attempt * 10))
+          echo "security-cli tools update-db failed; retrying in ${sleep_seconds}s"
+          sleep "${sleep_seconds}"
+        done
 
     - name: Set up annotation runtime
       uses: actions/setup-node@v4
