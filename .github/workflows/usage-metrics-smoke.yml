@@ -1,0 +1,25 @@
+name: Usage Metrics Smoke Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Run security-cli-action with usage metrics
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run local action
+        uses: ./
+        env:
+          SE_ACTIONS_API_KEY: ${{ secrets.SE_ACTIONS_API_KEY }}
+        with:
+          checkout: "false"
+          fail-on-findings: "false"
+          profile: ci
+          target: .
