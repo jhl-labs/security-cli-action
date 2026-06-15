@@ -329,16 +329,42 @@ runs:
             .replace(/\n/g, '%0A');
         }
 
-        function severityFromResult(result) {
+        function severityFromValue(value) {
+          const numeric = Number(value);
+          if (Number.isFinite(numeric)) {
+            if (numeric >= 9) return 'critical';
+            if (numeric >= 7) return 'high';
+            if (numeric >= 4) return 'medium';
+            if (numeric > 0) return 'low';
+          }
+
+          const text = String(value ?? '').toLowerCase();
+          if (/\bcritical\b|\bcrit\b/.test(text)) return 'critical';
+          if (/\bhigh\b/.test(text)) return 'high';
+          if (/\bmedium\b|\bmoderate\b/.test(text)) return 'medium';
+          if (/\blow\b/.test(text)) return 'low';
+          return null;
+        }
+
+        function severityFromResult(result, rule) {
           const properties = result.properties || {};
-          const rawSeverity = [
+          const ruleProperties = rule?.properties || {};
+          const explicitSeverity = [
+            ruleProperties.severity,
+            ruleProperties.securitySeverity,
+            ruleProperties['security-severity'],
             properties.severity,
+            properties.securitySeverity,
             properties['security-severity'],
             properties.problem?.severity,
             ...(Array.isArray(properties.tags) ? properties.tags : []),
-            result.ruleId,
-            result.message?.text,
           ]
+            .map(severityFromValue)
+            .find(Boolean);
+
+          if (explicitSeverity) return explicitSeverity;
+
+          const rawSeverity = [result.ruleId, result.message?.text]
             .filter(Boolean)
             .join(' ')
             .toLowerCase();
@@ -383,10 +409,10 @@ runs:
             for (const result of run.results || []) {
               if (emitted >= limit) break;
 
-              const severity = severityFromResult(result);
+              const rule = rules.get(result.ruleId) || {};
+              const severity = severityFromResult(result, rule);
               const level = commandLevel(severity);
               const location = firstLocation(result);
-              const rule = rules.get(result.ruleId) || {};
               const title = `${severity.toUpperCase()}: ${
                 rule.name || rule.shortDescription?.text || result.ruleId || 'security finding'
               }`;
