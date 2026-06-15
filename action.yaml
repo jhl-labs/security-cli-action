@@ -297,6 +297,53 @@ runs:
 
         exit 0
 
+    - name: Ensure SARIF report exists
+      shell: bash
+      env:
+        SECURITY_CLI_OUTPUT_DIR: ${{ inputs.output-dir }}
+        SECURITY_CLI_FORMATS: ${{ inputs.formats }}
+      run: |
+        set -euo pipefail
+
+        requested_sarif=false
+        IFS=',' read -ra requested_formats <<< "${SECURITY_CLI_FORMATS}"
+        for format in "${requested_formats[@]}"; do
+          trimmed="$(echo "${format}" | xargs | tr '[:upper:]' '[:lower:]')"
+          if [ "${trimmed}" = "sarif" ]; then
+            requested_sarif=true
+          fi
+        done
+
+        if [ "${requested_sarif}" != "true" ]; then
+          exit 0
+        fi
+
+        mkdir -p "${SECURITY_CLI_OUTPUT_DIR}"
+        if find "${SECURITY_CLI_OUTPUT_DIR}" -type f -name '*.sarif' | grep -q .; then
+          exit 0
+        fi
+
+        node > "${SECURITY_CLI_OUTPUT_DIR}/security-report.sarif" <<'NODE'
+        const report = {
+          version: '2.1.0',
+          $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+          runs: [
+            {
+              tool: {
+                driver: {
+                  name: 'security-cli',
+                  informationUri: 'https://github.com/jhl-labs/security-cli',
+                  rules: [],
+                },
+              },
+              results: [],
+            },
+          ],
+        };
+
+        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        NODE
+
     - name: Publish GitHub annotations
       shell: bash
       env:
