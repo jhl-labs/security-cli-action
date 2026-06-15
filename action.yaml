@@ -298,6 +298,7 @@ runs:
         exit 0
 
     - name: Ensure SARIF report exists
+      if: ${{ always() }}
       shell: bash
       env:
         SECURITY_CLI_OUTPUT_DIR: ${{ inputs.output-dir }}
@@ -325,7 +326,7 @@ runs:
         fi
 
         node > "${SECURITY_CLI_OUTPUT_DIR}/security-report.sarif" <<'NODE'
-        const exitCode = process.env.SECURITY_CLI_EXIT_CODE || '0';
+        const exitCode = process.env.SECURITY_CLI_EXIT_CODE || '1';
         const scanFailed = exitCode !== '0';
         const rules = scanFailed
           ? [
@@ -397,6 +398,7 @@ runs:
         NODE
 
     - name: Publish GitHub annotations
+      if: ${{ always() }}
       shell: bash
       env:
         SECURITY_CLI_OUTPUT_DIR: ${{ inputs.output-dir }}
