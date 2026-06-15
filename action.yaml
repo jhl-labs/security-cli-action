@@ -302,6 +302,7 @@ runs:
       env:
         SECURITY_CLI_OUTPUT_DIR: ${{ inputs.output-dir }}
         SECURITY_CLI_FORMATS: ${{ inputs.formats }}
+        SECURITY_CLI_EXIT_CODE: ${{ steps.scan.outputs.exit-code }}
       run: |
         set -euo pipefail
 
@@ -324,6 +325,51 @@ runs:
         fi
 
         node > "${SECURITY_CLI_OUTPUT_DIR}/security-report.sarif" <<'NODE'
+        const exitCode = process.env.SECURITY_CLI_EXIT_CODE || '0';
+        const scanFailed = exitCode !== '0';
+        const rules = scanFailed
+          ? [
+              {
+                id: 'security-cli.scan-failed',
+                name: 'security-cli scan failed',
+                shortDescription: {
+                  text: 'security-cli did not produce a SARIF report',
+                },
+                fullDescription: {
+                  text: 'security-cli exited without producing the requested SARIF report. Treat this as an incomplete security scan rather than zero findings.',
+                },
+                properties: {
+                  severity: 'high',
+                },
+              },
+            ]
+          : [];
+        const results = scanFailed
+          ? [
+              {
+                ruleId: 'security-cli.scan-failed',
+                level: 'error',
+                message: {
+                  text: `security-cli exited with code ${exitCode} before producing a SARIF report. Review the workflow log and scanner output.`,
+                },
+                locations: [
+                  {
+                    physicalLocation: {
+                      artifactLocation: {
+                        uri: 'security-cli',
+                      },
+                      region: {
+                        startLine: 1,
+                      },
+                    },
+                  },
+                ],
+                properties: {
+                  severity: 'high',
+                },
+              },
+            ]
+          : [];
         const report = {
           version: '2.1.0',
           $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
@@ -333,10 +379,16 @@ runs:
                 driver: {
                   name: 'security-cli',
                   informationUri: 'https://github.com/jhl-labs/security-cli',
-                  rules: [],
+                  rules,
                 },
               },
-              results: [],
+              invocations: [
+                {
+                  executionSuccessful: !scanFailed,
+                  exitCode: Number.parseInt(exitCode, 10) || 0,
+                },
+              ],
+              results,
             },
           ],
         };
